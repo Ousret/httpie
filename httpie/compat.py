@@ -2,8 +2,49 @@ import sys
 from typing import Any, Optional, Iterable
 
 from httpie.cookies import HTTPieCookiePolicy
-from http import cookiejar # noqa
+from http import cookiejar  # noqa
 
+import niquests
+from niquests._compat import HAS_LEGACY_URLLIB3
+
+
+# to understand why this is required
+# see https://niquests.readthedocs.io/en/latest/community/faq.html#what-is-urllib3-future
+# short story, urllib3 (import/top-level import) may be the legacy one https://github.com/urllib3/urllib3
+# instead of urllib3-future https://github.com/jawah/urllib3.future used by Niquests
+# or only the secondary entry point could be available (e.g. urllib3_future on some distro without urllib3)
+if not HAS_LEGACY_URLLIB3:
+    # noinspection PyPackageRequirements
+    import urllib3  # noqa: F401
+    from urllib3.util import SKIP_HEADER, SKIPPABLE_HEADERS, parse_url, Timeout  # noqa: F401
+    from urllib3.fields import RequestField, format_header_param_rfc2231  # noqa: F401
+    from urllib3.util.ssl_ import (  # noqa: F401
+        create_urllib3_context,
+        resolve_ssl_version,
+    )
+else:
+    # noinspection PyPackageRequirements
+    import urllib3_future as urllib3  # noqa: F401
+    from urllib3_future.util import SKIP_HEADER, SKIPPABLE_HEADERS, parse_url, Timeout  # noqa: F401
+    from urllib3_future.fields import RequestField, format_header_param_rfc2231  # noqa: F401
+    from urllib3_future.util.ssl_ import (  # noqa: F401
+        create_urllib3_context,
+        resolve_ssl_version,
+    )
+
+# Importlib_metadata was a provisional module, so the APIs changed quite a few times
+# between 3.8-3.10. It was also not included in the standard library until 3.8, so
+# we install the backport for <3.8.
+if sys.version_info >= (3, 8):
+    import importlib.metadata as importlib_metadata
+else:
+    import importlib_metadata
+
+is_windows = 'win32' in str(sys.platform).lower()
+is_frozen = getattr(sys, 'frozen', False)
+
+MIN_SUPPORTED_PY_VERSION = (3, 7)
+MAX_SUPPORTED_PY_VERSION = (3, 11)
 
 # Request does not carry the original policy attached to the
 # cookie jar, so until it is resolved we change the global cookie
@@ -11,11 +52,26 @@ from http import cookiejar # noqa
 cookiejar.DefaultCookiePolicy = HTTPieCookiePolicy
 
 
-is_windows = 'win32' in str(sys.platform).lower()
-is_frozen = getattr(sys, 'frozen', False)
+def has_ipv6_support(new_value: Optional[bool] = None) -> bool:
+    if new_value is not None:
+        # Allow overriding the default value for testing purposes.
+        urllib3.util.connection.HAS_IPV6 = new_value
+    return urllib3.util.connection.HAS_IPV6
 
-MIN_SUPPORTED_PY_VERSION = (3, 7)
-MAX_SUPPORTED_PY_VERSION = (3, 11)
+
+def enforce_niquests():
+    """
+    Force imported 3rd-party plugins to use `niquests` instead of `requests` if they haven’t migrated yet.
+
+    It’s a drop-in replacement for Requests so such plugins might continue to work unless they touch internals.
+
+    """
+    sys.modules["requests"] = niquests
+    sys.modules["requests.adapters"] = niquests.adapters
+    sys.modules["requests.sessions"] = niquests.sessions
+    sys.modules["requests.exceptions"] = niquests.exceptions
+    sys.modules["requests.packages.urllib3"] = urllib3
+
 
 try:
     from functools import cached_property
@@ -65,16 +121,6 @@ except ImportError:
                 return self
             res = instance.__dict__[self.name] = self.func(instance)
             return res
-
-
-# importlib_metadata was a provisional module, so the APIs changed quite a few times
-# between 3.8-3.10. It was also not included in the standard library until 3.8, so
-# we install the backport for <3.8.
-
-if sys.version_info >= (3, 8):
-    import importlib.metadata as importlib_metadata
-else:
-    import importlib_metadata
 
 
 def find_entry_points(entry_points: Any, group: str) -> Iterable[importlib_metadata.EntryPoint]:

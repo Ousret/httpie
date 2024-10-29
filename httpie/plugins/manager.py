@@ -1,18 +1,16 @@
-import sys
 import os
+import sys
 import warnings
-
+from contextlib import contextmanager, nullcontext
 from itertools import groupby
 from operator import attrgetter
-from typing import Dict, List, Type, Iterator, Iterable, Optional, ContextManager
 from pathlib import Path
-from contextlib import contextmanager, nullcontext
+from typing import Dict, List, Type, Iterator, Iterable, Optional, ContextManager
 
-from ..compat import importlib_metadata, find_entry_points, get_dist_name
-
-from ..utils import repr_dict, get_site_paths
 from . import AuthPlugin, ConverterPlugin, FormatterPlugin, TransportPlugin
 from .base import BasePlugin
+from ..compat import importlib_metadata, find_entry_points, get_dist_name, enforce_niquests
+from ..utils import repr_dict, get_site_paths
 
 
 ENTRY_POINT_CLASSES = {
@@ -64,6 +62,7 @@ class PluginManager(list):
                 yield from find_entry_points(eps, group=entry_point_name)
 
     def load_installed_plugins(self, directory: Optional[Path] = None):
+        enforce_niquests()
         for entry_point in self.iter_entry_points(directory):
             plugin_name = get_dist_name(entry_point)
             try:
@@ -72,8 +71,8 @@ class PluginManager(list):
                 warnings.warn(
                     f'While loading "{plugin_name}", an error occurred: {exc}\n'
                     f'For uninstallations, please use either "httpie plugins uninstall {plugin_name}" '
-                    f'or "pip uninstall {plugin_name}" (depending on how you installed it in the first '
-                    'place).'
+                    f'or "pip uninstall {plugin_name}" (depending on how you installed it in the first place). '
+                    'The error might be related to HTTPie’s migration from `requests` to `niquests`.'
                 )
                 continue
             plugin.package_name = plugin_name

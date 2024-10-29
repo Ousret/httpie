@@ -1,5 +1,5 @@
 """Tests for dealing with binary request and response data."""
-import requests
+import niquests
 
 from .fixtures import BIN_FILE_PATH, BIN_FILE_CONTENT, BIN_FILE_PATH_ARG
 from httpie.output.streams import BINARY_SUPPRESSED_NOTICE
@@ -32,19 +32,22 @@ class TestBinaryRequestData:
 
 
 class TestBinaryResponseData:
+    # Local httpbin crashes due to an unfixed bug — it is merged but not yet released.
+    # <https://github.com/psf/httpbin/pull/41>
+    # TODO: switch to the local `httpbin` fixture when the fix is released.
 
-    def test_binary_suppresses_when_terminal(self, httpbin):
-        r = http('GET', httpbin + '/bytes/1024?seed=1')
+    def test_binary_suppresses_when_terminal(self, remote_httpbin):
+        r = http('GET', remote_httpbin + '/bytes/1024?seed=1')
         assert BINARY_SUPPRESSED_NOTICE.decode() in r
 
-    def test_binary_suppresses_when_not_terminal_but_pretty(self, httpbin):
+    def test_binary_suppresses_when_not_terminal_but_pretty(self, remote_httpbin):
         env = MockEnvironment(stdin_isatty=True, stdout_isatty=False)
-        r = http('--pretty=all', 'GET', httpbin + '/bytes/1024?seed=1', env=env)
+        r = http('--pretty=all', 'GET', remote_httpbin + '/bytes/1024?seed=1', env=env)
         assert BINARY_SUPPRESSED_NOTICE.decode() in r
 
-    def test_binary_included_and_correct_when_suitable(self, httpbin):
+    def test_binary_included_and_correct_when_suitable(self, remote_httpbin):
         env = MockEnvironment(stdin_isatty=True, stdout_isatty=False)
-        url = httpbin + '/bytes/1024?seed=1'
+        url = remote_httpbin + '/bytes/1024?seed=1'
         r = http('GET', url, env=env)
-        expected = requests.get(url).content
+        expected = niquests.get(url).content
         assert r == expected

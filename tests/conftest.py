@@ -8,7 +8,6 @@ from .utils import (  # noqa
     HTTPBIN_WITH_CHUNKED_SUPPORT_DOMAIN,
     HTTPBIN_WITH_CHUNKED_SUPPORT,
     REMOTE_HTTPBIN_DOMAIN,
-    IS_PYOPENSSL,
     mock_env
 )
 from .utils.plugins_cli import (  # noqa
@@ -80,17 +79,8 @@ def remote_httpbin(_remote_httpbin_available):
     pytest.skip(f'{REMOTE_HTTPBIN_DOMAIN} not resolvable')
 
 
-@pytest.fixture(autouse=True, scope='session')
-def pyopenssl_inject():
-    """
-    Injects `pyOpenSSL` module to make sure `requests` will use it.
-    <https://github.com/psf/requests/pull/5443#issuecomment-645740394>
-    """
-    if IS_PYOPENSSL:
-        try:
-            import urllib3.contrib.pyopenssl
-            urllib3.contrib.pyopenssl.inject_into_urllib3()
-        except ModuleNotFoundError:
-            pytest.fail('Missing "pyopenssl" module.')
-
-    yield
+@pytest.fixture
+def remote_httpbin_secure(_remote_httpbin_available):
+    if _remote_httpbin_available:
+        return 'https://' + REMOTE_HTTPBIN_DOMAIN
+    pytest.skip(f'{REMOTE_HTTPBIN_DOMAIN} not resolvable')

@@ -5,29 +5,49 @@ import textwrap
 from argparse import FileType
 
 from httpie import __doc__, __version__
-from httpie.cli.argtypes import (KeyValueArgType, SessionNameValidator,
-                                 SSLCredentials, readable_file_arg,
-                                 response_charset_type, response_mime_type)
-from httpie.cli.constants import (BASE_OUTPUT_OPTIONS, DEFAULT_FORMAT_OPTIONS,
-                                  OUT_REQ_BODY, OUT_REQ_HEAD, OUT_RESP_BODY,
-                                  OUT_RESP_HEAD, OUT_RESP_META, OUTPUT_OPTIONS,
-                                  OUTPUT_OPTIONS_DEFAULT, PRETTY_MAP,
-                                  PRETTY_STDOUT_TTY_ONLY,
-                                  SEPARATOR_GROUP_ALL_ITEMS, SEPARATOR_PROXY,
-                                  SORTED_FORMAT_OPTIONS_STRING,
-                                  UNSORTED_FORMAT_OPTIONS_STRING, RequestType)
-from httpie.cli.options import ParserSpec, Qualifiers, to_argparse
-from httpie.output.formatters.colors import (AUTO_STYLE, DEFAULT_STYLE, BUNDLED_STYLES,
-                                             get_available_styles)
+from httpie.output.formatters.colors import (
+    AUTO_STYLE,
+    BUNDLED_STYLES,
+    DEFAULT_STYLE,
+    get_available_styles,
+)
 from httpie.plugins.builtin import BuiltinAuthPlugin
 from httpie.plugins.registry import plugin_manager
 from httpie.ssl_ import AVAILABLE_SSL_VERSION_ARG_MAPPING, DEFAULT_SSL_CIPHERS_STRING
+from .argtypes import (
+    KeyValueArgType,
+    SSLCredentials,
+    SessionNameValidator,
+    interface_arg_type,
+    readable_file_arg,
+    response_charset_arg_type,
+    response_mime_arg_type,
+)
+from .constants import (
+    BASE_OUTPUT_OPTIONS,
+    DEFAULT_FORMAT_OPTIONS,
+    OUTPUT_OPTIONS,
+    OUTPUT_OPTIONS_DEFAULT,
+    OUT_REQ_BODY,
+    OUT_REQ_HEAD,
+    OUT_RESP_BODY,
+    OUT_RESP_HEAD,
+    OUT_RESP_META,
+    PRETTY_MAP,
+    PRETTY_STDOUT_TTY_ONLY,
+    RequestType,
+    SEPARATOR_GROUP_ALL_ITEMS,
+    SEPARATOR_PROXY,
+    SORTED_FORMAT_OPTIONS_STRING,
+    UNSORTED_FORMAT_OPTIONS_STRING,
+)
+from .options import ParserSpec, Qualifiers, to_argparse
+from .ports import local_port_arg_type
 
 
 # Man pages are static (built when making a release).
 # We use this check to not include generated, system-specific information there (e.g., default --ciphers).
 IS_MAN_PAGE = bool(os.environ.get('HTTPIE_BUILDING_MAN_PAGES'))
-
 
 options = ParserSpec(
     'http',
@@ -349,7 +369,7 @@ output_processing.add_argument(
 output_processing.add_argument(
     '--response-charset',
     metavar='ENCODING',
-    type=response_charset_type,
+    type=response_charset_arg_type,
     short_help='Override the response encoding for terminal display purposes.',
     help="""
     Override the response encoding for terminal display purposes, e.g.:
@@ -362,7 +382,7 @@ output_processing.add_argument(
 output_processing.add_argument(
     '--response-mime',
     metavar='MIME_TYPE',
-    type=response_mime_type,
+    type=response_mime_arg_type,
     short_help='Override the response mime type for coloring and formatting for the terminal.',
     help="""
     Override the response mime type for coloring and formatting for the terminal, e.g.:
@@ -727,6 +747,22 @@ network.add_argument(
     """,
 )
 network.add_argument(
+    '--ipv6',
+    '-6',
+    dest='force_ipv6',
+    default=False,
+    action='store_true',
+    short_help='Force using a IPv6 address to reach the remote peer.'
+)
+network.add_argument(
+    '--ipv4',
+    '-4',
+    dest='force_ipv4',
+    default=False,
+    action='store_true',
+    short_help='Force using a IPv4 address to reach the remote peer.'
+)
+network.add_argument(
     '--follow',
     '-F',
     default=False,
@@ -802,6 +838,98 @@ network.add_argument(
         'The Transfer-Encoding header is set to chunked.'
     )
 )
+network.add_argument(
+    "--disable-http1",
+    default=False,
+    action="store_true",
+    short_help="Disable the HTTP/1 protocol."
+)
+network.add_argument(
+    "--http1",
+    default=False,
+    action="store_true",
+    dest="force_http1",
+    short_help="Use the HTTP/1 protocol for the request."
+)
+network.add_argument(
+    "--disable-http2",
+    default=False,
+    action="store_true",
+    short_help="Disable the HTTP/2 protocol."
+)
+network.add_argument(
+    "--http2",
+    default=False,
+    action="store_true",
+    dest="force_http2",
+    short_help="Use the HTTP/2 protocol for the request."
+)
+network.add_argument(
+    "--disable-http3",
+    default=False,
+    action="store_true",
+    short_help="Disable the HTTP/3 over QUIC protocol."
+)
+network.add_argument(
+    "--http3",
+    default=False,
+    dest="force_http3",
+    action="store_true",
+    short_help="Use the HTTP/3 protocol for the request.",
+    help="""
+    By default, HTTPie cannot negotiate HTTP/3 without a first HTTP/1.1, or HTTP/2 successful response unless the
+    remote host specified a DNS HTTPS record that indicate its support.
+
+    The remote server yield its support for HTTP/3 in the Alt-Svc header, if present HTTPie will issue
+    the successive requests via HTTP/3. You may use that argument in case the remote peer does not support
+    either HTTP/1.1 or HTTP/2.
+
+    """
+)
+network.add_argument(
+    "--heb",
+    default=False,
+    dest="happy_eyeballs",
+    action="store_true",
+    short_help="Establish the connection using IETF Happy Eyeballs algorithm",
+    help="""
+    By default, when HTTPie establish the connection it asks for the IP(v4 or v6) records of
+    the requested domain and then tries them sequentially preferring IPv6 by default. This
+    may induce longer connection delays and in some case hangs due to an unresponsive endpoint.
+    To concurrently try to connect to available IP(v4 or v6), set this flag.
+
+    """
+)
+network.add_argument(
+    "--resolver",
+    default=[],
+    action='append',
+    short_help="Specify a DNS resolver url to resolve hostname.",
+    help="""
+    By default, HTTPie use the system DNS through Python standard library.
+    You can specify an alternative DNS server to be used. (e.g. doh://cloudflare-dns.com or doh://google.dns).
+    You can specify multiple resolvers with different protocols. The environment
+    variable $NIQUESTS_DNS_URL is supported as well. This flag also support overriding DNS resolution
+    e.g. passing "pie.dev:1.1.1.1" will resolve pie.dev to 1.1.1.1 IPv4.
+
+    """
+)
+network.add_argument(
+    "--interface",
+    type=interface_arg_type,
+    default='0.0.0.0',
+    short_help="Bind to a specific network interface.",
+)
+network.add_argument(
+    "--local-port",
+    type=local_port_arg_type,
+    default=0,
+    short_help="Set the local port to be used for the outgoing request.",
+    help="""
+    It can be either a port range (e.g. "11221-14555") or a single port.
+    Some port may require root privileges (e.g. < 1024).
+    """
+)
 
 #######################################################################
 # SSL
@@ -826,23 +954,22 @@ ssl.add_argument(
     choices=sorted(AVAILABLE_SSL_VERSION_ARG_MAPPING.keys()),
     short_help='The desired protocol version to used.',
     help="""
-    The desired protocol version to use. This will default to
-    SSL v2.3 which will negotiate the highest protocol that both
-    the server and your installation of OpenSSL support. Available protocols
-    may vary depending on OpenSSL installation (only the supported ones
-    are shown here).
+    The desired protocol version to use. If not specified, it tries to
+    negotiate the highest protocol that both the server and your installation
+    of OpenSSL support. Available protocols may vary depending on OpenSSL
+    installation (only the supported ones are shown here).
 
     """,
 )
 
 CIPHERS_CURRENT_DEFAULTS = (
     """
-    See `http --help` for the default ciphers list on you system.
+    See `http --help` for the default ciphers list.
 
     """
     if IS_MAN_PAGE else
     f"""
-    By default, the following ciphers are used on your system:
+    By default, the following ciphers are used:
 
     {DEFAULT_SSL_CIPHERS_STRING}
 
@@ -854,6 +981,7 @@ ssl.add_argument(
     help=f"""
 
     A string in the OpenSSL cipher list format.
+    tls1.3 ciphers are always present regardless of your cipher list.
 
     {CIPHERS_CURRENT_DEFAULTS}
 

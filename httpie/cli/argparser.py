@@ -3,11 +3,12 @@ import errno
 import os
 import re
 import sys
+import threading
 from argparse import RawDescriptionHelpFormatter
 from textwrap import dedent
 from urllib.parse import urlsplit
 
-from requests.utils import get_netrc_auth
+from niquests.utils import get_netrc_auth
 
 from .argtypes import (
     AuthCredentials, SSLCredentials, KeyValueArgType,
@@ -24,9 +25,11 @@ from .constants import (
 )
 from .exceptions import ParseError
 from .requestitems import RequestItems
+from ..compat import has_ipv6_support
 from ..context import Environment
 from ..plugins.registry import plugin_manager
 from ..utils import ExplicitNullAuth, get_content_type
+from ..uploads import observe_stdin_for_data_thread
 
 
 class HTTPieHelpFormatter(RawDescriptionHelpFormatter):
@@ -164,15 +167,33 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
             and not self.args.ignore_stdin
             and not self.env.stdin_isatty
         )
-        self.has_input_data = self.has_stdin_data or self.args.raw is not None
         # Arguments processing and environment setup.
         self._apply_no_options(no_options)
+        self._process_http_versions()
         self._process_request_type()
         self._process_download_options()
         self._setup_standard_streams()
         self._process_output_options()
         self._process_pretty_options()
         self._process_format_options()
+        self._process_ip_version_options()
+
+        # bellow is a fix for detecting "false-or empty" stdin.
+        # see https://github.com/httpie/cli/issues/1551 for more information.
+        if self.has_stdin_data:
+            read_event = threading.Event()
+            observe_stdin_for_data_thread(env, self.env.stdin, read_event)
+            if (
+                hasattr(self.env.stdin, 'buffer')
+                and hasattr(self.env.stdin.buffer, "peek")
+                and not self.env.stdin.buffer.peek(1)
+            ):
+                self.has_stdin_data = False
+
+            read_event.set()
+
+        self.has_input_data = self.has_stdin_data or self.args.raw is not None
+
         self._guess_method()
         self._parse_items()
         self._process_url()
@@ -192,6 +213,38 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 self.error('cannot combine --compress and --multipart')
 
         return self.args
+
+    def _process_http_versions(self):
+        available, forced, disabled = (
+            {1, 2, 3},
+            {
+                self.args.force_http1 and 1,
+                self.args.force_http2 and 2,
+                self.args.force_http3 and 3,
+            } - {False},
+            {
+                self.args.disable_http1 and 1,
+                self.args.disable_http2 and 2,
+                self.args.disable_http3 and 3,
+            } - {False},
+        )
+        if forced and disabled:
+            self.error(
+                'You cannot both force a http protocol version and disable some other. e.g. '
+                '--http2 already force HTTP/2, do not use --disable-http1 at the same time.'
+            )
+        if len(forced) > 1:
+            self.error(
+                'You may only force one of --http1, --http2 or --http3. Use --disable-http1, '
+                '--disable-http2 or --disable-http3 instead if you prefer the excluding logic.'
+            )
+        if disabled == available:
+            self.error('At least one HTTP protocol version must be enabled.')
+
+        if forced:
+            self.args.disable_http1 = forced != {1}
+            self.args.disable_http2 = forced != {2}
+            self.args.disable_http3 = forced != {3}
 
     def _process_request_type(self):
         request_type = self.args.request_type
@@ -558,6 +611,15 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
             parsed_options = parse_format_options(options_group, defaults=parsed_options)
         self.args.format_options = parsed_options
 
+    def _process_ip_version_options(self):
+        if not has_ipv6_support() and self.args.force_ipv6:
+            self.error('Unable to force IPv6 because your system lack IPv6 support.')
+        if self.args.force_ipv4 and self.args.force_ipv6:
+            self.error(
+                'Unable to force both IPv4 and IPv6, omit the flags to allow both. '
+                'The flags "-6" and "-4" are meant to force one of them.'
+            )
+
     def print_manual(self):
         from httpie.output.ui import man_pages
 
@@ -598,6 +660,17 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
     def error(self, message):
         """Prints a usage message incorporating the message to stderr and
         exits."""
+
+        # We shall release the files in that case
+        # the process is going to quit early anyway.
+        if hasattr(self.args, "multipart_data"):
+            for f in self.args.multipart_data:
+                if isinstance(self.args.multipart_data[f], tuple):
+                    self.args.multipart_data[f][1].close()
+                elif isinstance(self.args.multipart_data[f], list):
+                    for item in self.args.multipart_data[f]:
+                        item[1].close()
+
         self.print_usage(sys.stderr)
         self.env.rich_error_console.print(
             dedent(
